@@ -78,6 +78,10 @@ export default function App() {
   const [tasks, setTasks] = useState<GenerationTask[]>([]); // Current session tasks
   const [gallery, setGallery] = useState<GeneratedImage[]>([]);
   
+  // Lazy Loading State
+  const [historyLimit, setHistoryLimit] = useState(5); // Start with 5 batches
+  const [galleryLimit, setGalleryLimit] = useState(24); // Start with 24 images
+  
   // UI - Lightbox
   const [lightboxState, setLightboxState] = useState<{
       isOpen: boolean;
@@ -86,6 +90,10 @@ export default function App() {
   }>({ isOpen: false, images: [], currentIndex: 0 });
   
   const scrollEndRef = useRef<HTMLDivElement>(null);
+  const historyTopObserver = useRef<IntersectionObserver | null>(null);
+  const galleryBottomObserver = useRef<IntersectionObserver | null>(null);
+  const historySentinelRef = useRef<HTMLDivElement>(null);
+  const gallerySentinelRef = useRef<HTMLDivElement>(null);
   
   // Style Modal State
   const [isStyleModalOpen, setStyleModalOpen] = useState(false);
@@ -162,15 +170,16 @@ export default function App() {
       localStorage.setItem('gp_params', JSON.stringify(params));
   }, [params]);
 
-  // Auto-scroll to bottom when tasks change
+  // Auto-scroll to bottom when NEW tasks are added (Create mode)
+  // We track tasks.length to only scroll when count increases
+  const prevTaskLengthRef = useRef(0);
   useEffect(() => {
-    if (activeTab === 'create' && tasks.length > 0) {
-        // Only scroll if we added new tasks (naive check or just on every update)
-        // We use a small timeout to let DOM render
+    if (activeTab === 'create' && tasks.length > prevTaskLengthRef.current) {
         setTimeout(() => {
             scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
     }
+    prevTaskLengthRef.current = tasks.length;
   }, [tasks.length, activeTab]);
 
   // Auto-resize textarea
@@ -199,6 +208,54 @@ export default function App() {
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, [lightboxState.isOpen, lightboxState.currentIndex, lightboxState.images.length]);
+
+  // --- Lazy Load Logic ---
+
+  // History Observer (Scroll UP to load older)
+  useEffect(() => {
+      if (activeTab !== 'create') return;
+      
+      if (historyTopObserver.current) historyTopObserver.current.disconnect();
+
+      historyTopObserver.current = new IntersectionObserver((entries) => {
+          if (entries[0].isIntersecting) {
+              setHistoryLimit(prev => prev + 5);
+          }
+      }, { rootMargin: '200px' });
+
+      if (historySentinelRef.current) {
+          historyTopObserver.current.observe(historySentinelRef.current);
+      }
+
+      return () => historyTopObserver.current?.disconnect();
+  }, [activeTab, tasks.length]); // Re-attach when list size changes potentially
+
+  // Gallery Observer (Scroll DOWN to load newer)
+  useEffect(() => {
+    if (activeTab === 'create') return;
+
+    if (galleryBottomObserver.current) galleryBottomObserver.current.disconnect();
+
+    galleryBottomObserver.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            setGalleryLimit(prev => prev + 24);
+        }
+    }, { rootMargin: '200px' });
+
+    if (gallerySentinelRef.current) {
+        galleryBottomObserver.current.observe(gallerySentinelRef.current);
+    }
+
+    return () => galleryBottomObserver.current?.disconnect();
+  }, [activeTab, gallery.length]);
+
+  // Reset limits on tab switch
+  useEffect(() => {
+      // Optional: Reset limit or keep state? Keeping state might be nicer for UX, 
+      // but let's be safe for performance.
+      // Actually, keeping separate state variables handles this.
+  }, [activeTab]);
+
 
   const loadGallery = async () => {
     const images = await getGallery();
@@ -571,7 +628,12 @@ export default function App() {
   };
 
   const groupedTasks = groupTasksByBatch(tasks);
+  
+  // Calculate Display Lists for Lazy Loading
+  const visibleHistoryGroups = groupedTasks.slice(-historyLimit); // Show last N batches
   const favoriteImages = gallery.filter(img => img.isFavorite);
+  const targetGalleryList = activeTab === 'favorites' ? favoriteImages : gallery;
+  const visibleGalleryImages = targetGalleryList.slice(0, galleryLimit); // Show first N images
 
   return (
     <div className="flex flex-col h-screen bg-black text-gray-100 font-sans selection:bg-peach-500/30">
@@ -666,7 +728,14 @@ export default function App() {
             <div className="max-w-[1800px] mx-auto space-y-10 min-h-[50vh]">
                 {groupedTasks.length > 0 ? (
                     <div className="space-y-20 pb-12">
-                        {groupedTasks.map((batch, index) => {
+                        {/* Sentinel for lazy loading history */}
+                        {groupedTasks.length > historyLimit && (
+                            <div ref={historySentinelRef} className="h-10 flex items-center justify-center">
+                                <div className="w-6 h-6 border-2 border-peach-500/30 border-t-peach-500 rounded-full animate-spin"></div>
+                            </div>
+                        )}
+
+                        {visibleHistoryGroups.map((batch, index) => {
                             const firstItem = batch[0];
                             const refData = batch.find(t => t.data)?.data;
                             const promptText = firstItem.prompt;
@@ -679,28 +748,29 @@ export default function App() {
                                 <div key={firstItem.batchId || index} className="group relative animate-in fade-in slide-in-from-bottom-4 duration-500">
                                     <div className="absolute -left-8 top-6 bottom-0 w-px bg-gradient-to-b from-peach-500/50 to-transparent hidden md:block opacity-30"></div>
                                     <div className="mb-8 pl-0 md:pl-4">
-                                        <p className="text-gray-200 text-xl font-light leading-relaxed max-w-5xl">{promptText}</p>
-                                        <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-gray-500 font-mono uppercase tracking-wider">
-                                             <span className="text-peach-400">
+                                        {/* Updated Typography for better readability */}
+                                        <p className="text-white text-lg md:text-xl font-normal leading-relaxed max-w-5xl tracking-wide">{promptText}</p>
+                                        <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-gray-400 font-mono uppercase tracking-wider">
+                                             <span className="text-peach-400 font-bold">
                                                  {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                              </span>
                                              <span>•</span>
                                              {styleId && styleId !== 'none' && (
                                                 <>
-                                                    <span className="flex items-center gap-1 text-gray-400">
+                                                    <span className="flex items-center gap-1 text-gray-300 font-medium">
                                                         {styleName}
                                                     </span>
                                                     <span>•</span>
                                                 </>
                                              )}
-                                             <span>{params.resolution}</span>
+                                             <span className="text-gray-300">{params.resolution}</span>
                                         </div>
                                     </div>
 
                                     <div className="space-y-8">
                                         {Object.entries(ratioGroups).map(([ratio, groupTasks]) => (
                                             <div key={ratio} className="space-y-3">
-                                                <div className="text-xs uppercase font-bold text-gray-600 pl-1 tracking-widest">{ratio}</div>
+                                                <div className="text-xs uppercase font-bold text-gray-500 pl-1 tracking-widest">{ratio}</div>
                                                 {/* Bigger Grid: md:grid-cols-3, lg:grid-cols-4 instead of 4/5 */}
                                                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 xl:gap-6">
                                                     {groupTasks.map(task => (
@@ -752,7 +822,7 @@ export default function App() {
             <div className="max-w-[1800px] mx-auto">
                  {/* Bigger Columns for Gallery too */}
                  <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-4 xl:gap-6 space-y-4 xl:space-y-6">
-                    {(activeTab === 'favorites' ? favoriteImages : gallery).map(img => (
+                    {visibleGalleryImages.map(img => (
                         <div key={img.id} className="break-inside-avoid">
                             <ImageCard 
                                 task={{
@@ -769,12 +839,18 @@ export default function App() {
                             />
                         </div>
                     ))}
-                    {(activeTab === 'favorites' ? favoriteImages : gallery).length === 0 && (
+                    {targetGalleryList.length === 0 && (
                         <div className="col-span-full text-center py-32 text-gray-500 text-lg">
                             {activeTab === 'favorites' ? 'No favorites yet.' : 'Gallery is empty.'}
                         </div>
                     )}
                 </div>
+                {/* Sentinel for lazy loading gallery */}
+                {visibleGalleryImages.length < targetGalleryList.length && (
+                    <div ref={gallerySentinelRef} className="h-20 flex items-center justify-center mt-8">
+                        <div className="w-8 h-8 border-2 border-peach-500/30 border-t-peach-500 rounded-full animate-spin"></div>
+                    </div>
+                )}
             </div>
         )}
       </main>
@@ -1034,11 +1110,21 @@ export default function App() {
 
       {/* --- Lightbox --- */}
       {lightboxState.isOpen && lightboxState.images.length > 0 && (
-          <div className="fixed inset-0 z-[100] bg-black/98 backdrop-blur flex items-center justify-center animate-in fade-in duration-200" onClick={() => setLightboxState(prev => ({ ...prev, isOpen: false }))}>
+          <div className="fixed inset-0 z-[100] bg-black/98 backdrop-blur flex flex-col animate-in fade-in duration-200">
               
-              {/* Image Container */}
+              {/* Top Bar with Close */}
+               <div className="flex-shrink-0 h-16 flex justify-end items-center px-4 md:px-8">
+                  <button 
+                    onClick={() => setLightboxState(prev => ({ ...prev, isOpen: false }))}
+                    className="p-3 bg-gray-800/50 hover:bg-gray-800 rounded-full text-white transition-colors"
+                  >
+                      <X size={24} />
+                  </button>
+               </div>
+
+              {/* Main Image Area - Flex 1 to take available space, no overlap */}
               <div 
-                className="relative max-w-full max-h-full p-4 md:p-12 flex items-center justify-center h-full w-full" 
+                className="flex-1 min-h-0 relative flex items-center justify-center px-4 md:px-12 pb-4" 
                 onClick={(e) => {
                     setLightboxState(prev => ({ ...prev, isOpen: false }));
                 }}
@@ -1053,66 +1139,56 @@ export default function App() {
                     }}
                   />
                   
-                  {/* Close Button */}
-                  <button 
-                    onClick={() => setLightboxState(prev => ({ ...prev, isOpen: false }))}
-                    className="absolute top-6 right-6 p-3 bg-gray-800/50 hover:bg-gray-800 rounded-full text-white transition-colors z-20"
-                  >
-                      <X size={24} />
-                  </button>
+                   {/* Navigation Arrows */}
+                   <button 
+                        onClick={(e) => { e.stopPropagation(); handlePrevImage(); }}
+                        className="absolute left-2 md:left-8 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
+                   >
+                       <ChevronLeft size={48} />
+                   </button>
+                   <button 
+                        onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
+                        className="absolute right-2 md:right-8 top-1/2 -translate-y-1/2 p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
+                   >
+                       <ChevronRight size={48} />
+                   </button>
+              </div>
 
-                  {/* Navigation Arrows */}
-                  <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between px-4 md:px-8 pointer-events-none">
-                       <button 
-                            onClick={(e) => { e.stopPropagation(); handlePrevImage(); }}
-                            className="pointer-events-auto p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
-                       >
-                           <ChevronLeft size={48} />
-                       </button>
-                       <button 
-                            onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
-                            className="pointer-events-auto p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
-                       >
-                           <ChevronRight size={48} />
-                       </button>
-                  </div>
-
-                  {/* Info Overlay */}
-                  <div 
-                    className="absolute bottom-8 left-0 right-0 text-center pointer-events-none px-4"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                      <div className="inline-flex flex-col items-center gap-2 pointer-events-auto">
-                        <p className="bg-black/60 px-6 py-3 rounded-2xl text-base text-gray-200 backdrop-blur-md border border-white/10 max-w-3xl line-clamp-2">
-                            {lightboxState.images[lightboxState.currentIndex].prompt}
-                        </p>
-                        <div className="flex gap-2">
-                            <button 
-                                onClick={() => handleIterate(lightboxState.images[lightboxState.currentIndex])}
-                                className="p-3 bg-black/40 border border-white/10 rounded-full text-gray-400 hover:text-peach-400 hover:bg-white/10 transition-colors backdrop-blur-md"
-                                title="Iterate / Chat"
-                            >
-                                <MessageSquare size={20} />
-                            </button>
-                            <button
-                                onClick={() => handleToggleFavorite(lightboxState.images[lightboxState.currentIndex])}
-                                className={`p-3 rounded-full backdrop-blur-md border transition-colors ${
-                                    lightboxState.images[lightboxState.currentIndex].isFavorite
-                                    ? 'bg-red-500/20 text-red-500 border-red-500/30' 
-                                    : 'bg-black/40 text-gray-400 border-white/10 hover:bg-white/10'
-                                }`}
-                            >
-                                <Heart size={20} fill={lightboxState.images[lightboxState.currentIndex].isFavorite ? "currentColor" : "none"} />
-                            </button>
-                            <a 
-                                href={lightboxState.images[lightboxState.currentIndex].url} 
-                                download={`giga-peach-${lightboxState.images[lightboxState.currentIndex].id}.png`}
-                                className="p-3 bg-black/40 border border-white/10 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition-colors backdrop-blur-md"
-                            >
-                                <Download size={20} />
-                            </a>
-                        </div>
-                      </div>
+              {/* Info Area - Static at bottom, distinct from image */}
+              <div 
+                className="flex-shrink-0 w-full bg-black/40 border-t border-white/5 p-6 backdrop-blur-lg"
+                onClick={(e) => e.stopPropagation()}
+              >
+                  <div className="max-w-4xl mx-auto flex flex-col items-center gap-4 text-center">
+                    <p className="text-base md:text-lg text-gray-200 font-medium leading-relaxed">
+                        {lightboxState.images[lightboxState.currentIndex].prompt}
+                    </p>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => handleIterate(lightboxState.images[lightboxState.currentIndex])}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-gray-800 border border-gray-700 rounded-full text-gray-300 hover:text-peach-400 hover:border-peach-500/50 transition-colors"
+                        >
+                            <MessageSquare size={18} />
+                            <span className="text-sm font-medium">Iterate</span>
+                        </button>
+                        <button
+                            onClick={() => handleToggleFavorite(lightboxState.images[lightboxState.currentIndex])}
+                            className={`p-2.5 rounded-full border transition-colors ${
+                                lightboxState.images[lightboxState.currentIndex].isFavorite
+                                ? 'bg-red-500/20 text-red-500 border-red-500/30' 
+                                : 'bg-gray-800 text-gray-400 border-gray-700 hover:text-white'
+                            }`}
+                        >
+                            <Heart size={20} fill={lightboxState.images[lightboxState.currentIndex].isFavorite ? "currentColor" : "none"} />
+                        </button>
+                        <a 
+                            href={lightboxState.images[lightboxState.currentIndex].url} 
+                            download={`giga-peach-${lightboxState.images[lightboxState.currentIndex].id}.png`}
+                            className="p-2.5 bg-gray-800 border border-gray-700 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                        >
+                            <Download size={20} />
+                        </a>
+                    </div>
                   </div>
               </div>
           </div>
