@@ -12,32 +12,32 @@
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://cocosgt.github.io/giga-peach/" />
+    <meta property="og:url" content="https://gigapeach.ai/" />
     <meta property="og:title" content="Giga Peach - AI Image Generator" />
     <meta property="og:description" content="Best Suite for Nano Banana Pro. Batch generate, multi-ratio support, and style transfer in your browser." />
-    <meta property="og:image" content="https://cocosgt.github.io/giga-peach/og-image.png" />
+    <meta property="og:image" content="https://gigapeach.ai/og-image.png" />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content="https://cocosgt.github.io/giga-peach/" />
+    <meta property="twitter:url" content="https://gigapeach.ai/" />
     <meta property="twitter:title" content="Giga Peach - AI Image Generator" />
     <meta property="twitter:description" content="Best Suite for Nano Banana Pro. Batch generate, multi-ratio support, and style transfer in your browser." />
-    <meta property="twitter:image" content="https://cocosgt.github.io/giga-peach/og-image.png" />
+    <meta property="twitter:image" content="https://gigapeach.ai/og-image.png" />
 
+    <!-- Tailwind CSS (CDN for simplicity, though PostCSS is better for prod, this works fine for now) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              // Updated to a Pinkish-Orange Coral Peach Palette (matching 🍑)
               peach: {
                 50: '#fff0f0',
                 100: '#ffdede',
                 200: '#ffc2c2',
                 300: '#ff9999',
                 400: '#ff8e78',
-                500: '#ff7f50', // Coral Peach Main
+                500: '#ff7f50',
                 600: '#ed5b2d',
                 700: '#c53d15',
                 800: '#a33316',
@@ -51,16 +51,20 @@
   <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "vite": "https://aistudiocdn.com/vite@^7.2.4",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
+    "path": "https://aistudiocdn.com/path@^0.12.7",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0"
   }
 }
 </script>
 </head>
   <body class="bg-gray-950 text-gray-100 antialiased overflow-hidden">
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
