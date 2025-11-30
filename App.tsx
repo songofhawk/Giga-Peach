@@ -659,6 +659,7 @@ export default function App() {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {/* Aspect Ratios */}
                             <div className="space-y-2">
+                                <div className="text-xs font-medium text-peach-500 mb-1">Nano Banana Settings</div>
                                 <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Aspect Ratio</label>
                                 <div className="grid grid-cols-5 gap-2">
                                     {portraitRatios.map(ratio => (
@@ -916,7 +917,7 @@ export default function App() {
           <div className="space-y-6">
               <div className="p-4 bg-peach-900/10 border border-peach-900/30 rounded-lg">
                   <p className="text-sm text-peach-200">
-                      Giga Peach uses the Gemini API directly from your browser. Your key is stored locally and never sent to our servers.
+                      This API Key is used to call Nano Banana. Giga Peach uses the Gemini API directly from your browser. Your key is stored locally and never sent to our servers.
                   </p>
               </div>
 
