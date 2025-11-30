@@ -12,7 +12,8 @@ import {
     ImageIcon, Sparkles, Settings, History, 
     Plus, X, RefreshCw, Wand2, LayoutGrid,
     MoreVertical, Trash2, ChevronUp, ChevronDown, 
-    SlidersHorizontal, Key, Github, Twitter
+    SlidersHorizontal, Key, Github, Twitter,
+    Heart, ChevronLeft, ChevronRight, Download
 } from './components/Icons';
 
 // Aspect Ratio Icon Helper
@@ -55,7 +56,7 @@ export default function App() {
   const [isKeyModalOpen, setKeyModalOpen] = useState(false);
 
   // --- App State ---
-  const [activeTab, setActiveTab] = useState<'create' | 'gallery'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'gallery' | 'favorites'>('create');
   
   // Params
   const [params, setParams] = useState<GenerationParams>({
@@ -70,15 +71,20 @@ export default function App() {
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
   
   // UI State
-  const [showConfig, setShowConfig] = useState(true);
+  const [showConfig, setShowConfig] = useState(false);
 
   // Data
   const [allPresets, setAllPresets] = useState<StylePreset[]>([]);
   const [tasks, setTasks] = useState<GenerationTask[]>([]); // Current session tasks
   const [gallery, setGallery] = useState<GeneratedImage[]>([]);
   
-  // UI
-  const [lightboxImage, setLightboxImage] = useState<GeneratedImage | null>(null);
+  // UI - Lightbox
+  const [lightboxState, setLightboxState] = useState<{
+      isOpen: boolean;
+      images: GeneratedImage[];
+      currentIndex: number;
+  }>({ isOpen: false, images: [], currentIndex: 0 });
+  
   const scrollEndRef = useRef<HTMLDivElement>(null);
   
   // Style Modal State
@@ -103,11 +109,6 @@ export default function App() {
     if (savedKey) setApiKey(savedKey);
     if (savedBaseUrl) setBaseUrl(savedBaseUrl);
     
-    // Default closed on mobile
-    if (window.innerWidth < 768) {
-        setShowConfig(false);
-    }
-
     initDB().then(async () => {
       // 1. Migrate/Update Default Preset
       const defaultPresetDef = DEFAULT_PRESETS.find(p => p.id === 'none');
@@ -160,6 +161,24 @@ export default function App() {
           promptInputRef.current.style.height = `${promptInputRef.current.scrollHeight}px`;
       }
   }, [prompt]);
+
+  // Keyboard navigation for Lightbox
+  useEffect(() => {
+      if (!lightboxState.isOpen) return;
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+              handleNextImage();
+          } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+              handlePrevImage();
+          } else if (e.key === 'Escape') {
+              setLightboxState(prev => ({ ...prev, isOpen: false }));
+          }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxState.isOpen, lightboxState.currentIndex, lightboxState.images.length]);
 
   const loadGallery = async () => {
     const images = await getGallery();
@@ -303,6 +322,26 @@ export default function App() {
       setStyleModalOpen(false);
   };
 
+  const handleToggleFavorite = async (image: GeneratedImage) => {
+      const newStatus = !image.isFavorite;
+      const updatedImage = { ...image, isFavorite: newStatus };
+      
+      // Update DB
+      await saveImage(updatedImage);
+      
+      // Update State (Gallery & Tasks)
+      setGallery(prev => prev.map(img => img.id === image.id ? updatedImage : img));
+      setTasks(prev => prev.map(t => t.data?.id === image.id ? { ...t, data: updatedImage } : t));
+      
+      // Update Lightbox if open
+      if (lightboxState.isOpen) {
+          setLightboxState(prev => ({
+              ...prev,
+              images: prev.images.map(img => img.id === image.id ? updatedImage : img)
+          }));
+      }
+  };
+
   const handleGenerate = async (retryPrompt?: string, retryRefImages?: string[]) => {
     // 1. Check API Key
     if (!apiKey) {
@@ -398,6 +437,7 @@ export default function App() {
       setPrompt(image.prompt);
       setActiveTab('create');
       setTimeout(() => promptInputRef.current?.focus(), 100);
+      setLightboxState(prev => ({ ...prev, isOpen: false }));
   };
 
   const handleDeleteTask = (id: string) => {
@@ -407,6 +447,10 @@ export default function App() {
   const handleDeleteGallery = async (id: string) => {
       await deleteImage(id);
       loadGallery();
+      // If deleted in lightbox, close or switch
+      if (lightboxState.isOpen && lightboxState.images[lightboxState.currentIndex]?.id === id) {
+          setLightboxState(prev => ({ ...prev, isOpen: false }));
+      }
   };
   
   const handleRegenerateBatch = (batchTasks: GenerationTask[]) => {
@@ -419,6 +463,48 @@ export default function App() {
         handleGenerate(firstPrompt);
       }
   };
+
+  // --- Lightbox Logic ---
+  
+  const openLightbox = (image: GeneratedImage, sourceList?: GeneratedImage[]) => {
+      // Determine the list context
+      let list = sourceList;
+      if (!list) {
+          // Fallback context based on active tab
+          if (activeTab === 'gallery') list = gallery;
+          else if (activeTab === 'favorites') list = gallery.filter(img => img.isFavorite);
+          else {
+              // Create tab: flatten current tasks with data
+              list = tasks
+                  .filter(t => t.status === 'success' && t.data)
+                  .map(t => t.data!)
+                  .reverse(); // Assuming typical reverse chrono order in UI
+          }
+      }
+      
+      const index = list.findIndex(img => img.id === image.id);
+      setLightboxState({
+          isOpen: true,
+          images: list,
+          currentIndex: index !== -1 ? index : 0
+      });
+  };
+
+  const handleNextImage = () => {
+      setLightboxState(prev => ({
+          ...prev,
+          currentIndex: (prev.currentIndex + 1) % prev.images.length
+      }));
+  };
+
+  const handlePrevImage = () => {
+      setLightboxState(prev => ({
+          ...prev,
+          currentIndex: (prev.currentIndex - 1 + prev.images.length) % prev.images.length
+      }));
+  };
+
+  // --- Grouping Logic ---
 
   const groupTasksByBatch = (tasks: GenerationTask[]) => {
       const groups: { [key: string]: GenerationTask[] } = {};
@@ -460,54 +546,55 @@ export default function App() {
   };
 
   const groupedTasks = groupTasksByBatch(tasks);
+  const favoriteImages = gallery.filter(img => img.isFavorite);
 
   return (
     <div className="flex flex-col h-screen bg-black text-gray-100 font-sans selection:bg-peach-500/30">
       {/* --- Header --- */}
-      <header className="flex items-center justify-between px-4 md:px-6 py-4 fixed top-0 left-0 right-0 z-40 bg-gradient-to-b from-black/90 to-transparent backdrop-blur-[2px] pointer-events-none">
+      <header className="flex items-center justify-between px-4 md:px-8 py-4 fixed top-0 left-0 right-0 z-40 bg-gradient-to-b from-black/90 to-transparent backdrop-blur-[2px] pointer-events-none">
         <div 
             onClick={() => setActiveTab('create')}
-            className="flex items-center gap-3 pointer-events-auto cursor-pointer group select-none"
+            className="flex items-center gap-4 pointer-events-auto cursor-pointer group select-none"
         >
             <div className="flex items-center justify-center drop-shadow-[0_0_8px_rgba(255,127,80,0.3)] transition-transform group-hover:scale-110 duration-300">
-                <span className="text-3xl leading-none">🍑</span>
+                <span className="text-4xl leading-none">🍑</span>
             </div>
-            <div>
-                <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-peach-400 to-white leading-none transition-all group-hover:text-peach-200">
+            <div className="hidden sm:block">
+                <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-peach-400 to-white leading-none transition-all group-hover:text-peach-200">
                     Giga Peach
                 </h1>
-                <p className="text-[10px] text-gray-500 font-medium tracking-wide mt-0.5">Best Suite for Nano Banana</p>
+                <p className="text-xs text-gray-500 font-medium tracking-wide mt-1">Best Suite for Nano Banana</p>
             </div>
         </div>
         
-        <div className="flex items-center gap-2 md:gap-3 pointer-events-auto">
+        <div className="flex items-center gap-2 md:gap-4 pointer-events-auto">
              {/* Social Links (Subtle) & Badges */}
-             <div className="hidden md:flex items-center gap-3 mr-2">
+             <div className="hidden lg:flex items-center gap-4 mr-2">
                  {/* Open Source Badge */}
                 <a 
                     href="https://github.com/CocoSgt/Giga-Peach" 
                     target="_blank" 
                     rel="noopener noreferrer" 
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-900/50 border border-gray-700/50 text-[10px] font-medium text-gray-400 hover:text-white hover:border-peach-500/50 transition-all group"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/50 border border-gray-700/50 text-xs font-medium text-gray-400 hover:text-white hover:border-peach-500/50 transition-all group"
                 >
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.4)]"></div>
+                    <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.4)]"></div>
                     <span className="group-hover:text-gray-200">Open Source</span>
                 </a>
 
-                <div className="h-4 w-px bg-gray-800 mx-1"></div>
+                <div className="h-5 w-px bg-gray-800 mx-1"></div>
 
-                <a href="https://x.com/CocoSgt_twt" target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-peach-400 transition-colors">
-                    <Twitter size={16} />
+                <a href="https://x.com/CocoSgt_twt" target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-peach-400 transition-colors p-1">
+                    <Twitter size={18} />
                 </a>
-                <a href="https://github.com/CocoSgt/Giga-Peach" target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-peach-400 transition-colors">
-                    <Github size={16} />
+                <a href="https://github.com/CocoSgt/Giga-Peach" target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-peach-400 transition-colors p-1">
+                    <Github size={18} />
                 </a>
-                <div className="h-4 w-px bg-gray-800"></div>
+                <div className="h-5 w-px bg-gray-800"></div>
              </div>
 
              <button 
                 onClick={() => setKeyModalOpen(true)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium border transition-all ${
                     apiKey 
                     ? 'bg-green-900/20 border-green-800 text-green-400 hover:bg-green-900/40' 
                     : 'bg-red-900/20 border-red-800 text-red-400 hover:bg-red-900/40 animate-pulse'
@@ -515,36 +602,45 @@ export default function App() {
             >
                 <div className={`w-2 h-2 rounded-full ${apiKey ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="hidden sm:inline">{apiKey ? 'Connected' : 'Connect Key'}</span>
-                <Key size={14} />
+                <Key size={16} />
             </button>
 
-            <div className="hidden md:block h-6 w-px bg-gray-800 mx-1"></div>
+            <div className="hidden md:block h-8 w-px bg-gray-800 mx-1"></div>
 
-            <div className="flex bg-gray-900/80 backdrop-blur rounded-lg p-1 border border-gray-800 shadow-lg">
+            <div className="flex bg-gray-900/80 backdrop-blur rounded-xl p-1.5 border border-gray-800 shadow-lg">
                 <button 
                     onClick={() => setActiveTab('create')}
-                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'create' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' : 'text-gray-400 hover:text-gray-200'}`}
+                    className={`px-4 md:px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'create' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' : 'text-gray-400 hover:text-gray-200'}`}
+                    title="Create"
                 >
-                    <span className="flex items-center gap-2"><Sparkles size={16}/> <span className="hidden sm:inline">Create</span></span>
+                    <span className="flex items-center gap-2"><Sparkles size={18}/> <span className="hidden sm:inline">Create</span></span>
                 </button>
                 <button 
                     onClick={() => { setActiveTab('gallery'); loadGallery(); }}
-                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === 'gallery' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' : 'text-gray-400 hover:text-gray-200'}`}
+                    className={`px-4 md:px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'gallery' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' : 'text-gray-400 hover:text-gray-200'}`}
+                    title="Gallery"
                 >
-                    <span className="flex items-center gap-2"><History size={16}/> <span className="hidden sm:inline">Gallery</span></span>
+                    <span className="flex items-center gap-2"><History size={18}/> <span className="hidden sm:inline">Gallery</span></span>
+                </button>
+                <button 
+                    onClick={() => { setActiveTab('favorites'); loadGallery(); }}
+                    className={`px-4 md:px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'favorites' ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700' : 'text-gray-400 hover:text-gray-200'}`}
+                    title="Collection"
+                >
+                     <span className="flex items-center gap-2"><Heart size={18} fill={activeTab === 'favorites' ? "currentColor" : "none"}/><span className="hidden sm:inline">Collection</span></span>
                 </button>
             </div>
         </div>
       </header>
 
       {/* --- Main Content --- */}
-      <main className="flex-1 overflow-y-auto pt-24 pb-48 px-4 md:px-6 scrollbar-thin scrollbar-thumb-gray-800">
+      <main className="flex-1 overflow-y-auto pt-28 pb-48 px-4 md:px-8 scrollbar-thin scrollbar-thumb-gray-800">
         
         {/* CREATE TAB */}
         {activeTab === 'create' && (
-            <div className="max-w-7xl mx-auto space-y-8 min-h-[50vh]">
+            <div className="max-w-[1800px] mx-auto space-y-10 min-h-[50vh]">
                 {groupedTasks.length > 0 ? (
-                    <div className="space-y-16 pb-12">
+                    <div className="space-y-20 pb-12">
                         {groupedTasks.map((batch, index) => {
                             const firstItem = batch[0];
                             const refData = batch.find(t => t.data)?.data;
@@ -556,10 +652,10 @@ export default function App() {
 
                             return (
                                 <div key={firstItem.batchId || index} className="group relative animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                    <div className="absolute -left-6 top-6 bottom-0 w-px bg-gradient-to-b from-peach-500/50 to-transparent hidden md:block opacity-30"></div>
-                                    <div className="mb-6 pl-0 md:pl-2">
-                                        <p className="text-gray-200 text-lg font-light leading-relaxed max-w-4xl">{promptText}</p>
-                                        <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-gray-500 font-mono uppercase tracking-wider">
+                                    <div className="absolute -left-8 top-6 bottom-0 w-px bg-gradient-to-b from-peach-500/50 to-transparent hidden md:block opacity-30"></div>
+                                    <div className="mb-8 pl-0 md:pl-4">
+                                        <p className="text-gray-200 text-xl font-light leading-relaxed max-w-5xl">{promptText}</p>
+                                        <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-gray-500 font-mono uppercase tracking-wider">
                                              <span className="text-peach-400">
                                                  {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                              </span>
@@ -576,18 +672,20 @@ export default function App() {
                                         </div>
                                     </div>
 
-                                    <div className="space-y-6">
+                                    <div className="space-y-8">
                                         {Object.entries(ratioGroups).map(([ratio, groupTasks]) => (
-                                            <div key={ratio} className="space-y-2">
-                                                <div className="text-[10px] uppercase font-bold text-gray-600 pl-1 tracking-widest">{ratio}</div>
-                                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                                            <div key={ratio} className="space-y-3">
+                                                <div className="text-xs uppercase font-bold text-gray-600 pl-1 tracking-widest">{ratio}</div>
+                                                {/* Bigger Grid: md:grid-cols-3, lg:grid-cols-4 instead of 4/5 */}
+                                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 xl:gap-6">
                                                     {groupTasks.map(task => (
                                                         <div key={task.id} className="transform transition-all duration-500 hover:scale-[1.01]">
                                                             <ImageCard 
                                                                 task={task} 
                                                                 onDelete={handleDeleteTask}
                                                                 onIterate={handleIterate}
-                                                                onView={setLightboxImage}
+                                                                onView={(img) => openLightbox(img)}
+                                                                onToggleFavorite={handleToggleFavorite}
                                                             />
                                                         </div>
                                                     ))}
@@ -596,39 +694,40 @@ export default function App() {
                                         ))}
                                     </div>
                                     
-                                    <div className="mt-4 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                    <div className="mt-6 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                                         <button 
                                             onClick={() => handleRegenerateBatch(batch)}
-                                            className="flex items-center gap-2 text-xs text-peach-500 hover:text-peach-400 transition-colors bg-peach-500/10 px-3 py-1.5 rounded-full border border-peach-500/20"
+                                            className="flex items-center gap-2 text-sm text-peach-500 hover:text-peach-400 transition-colors bg-peach-500/10 px-4 py-2 rounded-full border border-peach-500/20"
                                         >
-                                            <RefreshCw size={12} />
+                                            <RefreshCw size={14} />
                                             <span>Regenerate Batch</span>
                                         </button>
                                     </div>
                                 </div>
                             );
                         })}
-                         <div ref={scrollEndRef} className="h-4" /> 
+                         <div ref={scrollEndRef} className="h-8" /> 
                     </div>
                 ) : (
-                    <div className="h-[60vh] flex flex-col items-center justify-center text-gray-600 space-y-6 animate-in fade-in zoom-in duration-700">
-                        <div className="p-6 rounded-full bg-gray-900/50 border border-gray-800 shadow-[0_0_30px_rgba(255,127,80,0.2)]">
-                            <span className="text-6xl select-none drop-shadow-[0_0_15px_rgba(255,127,80,0.5)] filter-none opacity-100">🍑</span>
+                    <div className="h-[65vh] flex flex-col items-center justify-center text-gray-600 space-y-8 animate-in fade-in zoom-in duration-700">
+                        <div className="p-8 rounded-full bg-gray-900/50 border border-gray-800 shadow-[0_0_40px_rgba(255,127,80,0.2)]">
+                            <span className="text-7xl select-none drop-shadow-[0_0_20px_rgba(255,127,80,0.5)] filter-none opacity-100">🍑</span>
                         </div>
-                        <div className="text-center space-y-3">
-                            <h3 className="text-2xl font-semibold text-gray-300">Batch Generate • Multi-Ratio</h3>
-                            <p className="text-sm max-w-sm text-gray-500 mx-auto">make Nano feel Giga</p>
+                        <div className="text-center space-y-4">
+                            <h3 className="text-3xl font-semibold text-gray-300">Batch Generate • Multi-Ratio</h3>
+                            <p className="text-base max-w-sm text-gray-500 mx-auto">make Nano feel Giga</p>
                         </div>
                     </div>
                 )}
             </div>
         )}
 
-        {/* GALLERY TAB */}
-        {activeTab === 'gallery' && (
-            <div className="max-w-7xl mx-auto">
-                 <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-4 space-y-4">
-                    {gallery.map(img => (
+        {/* GALLERY & FAVORITES TAB */}
+        {(activeTab === 'gallery' || activeTab === 'favorites') && (
+            <div className="max-w-[1800px] mx-auto">
+                 {/* Bigger Columns for Gallery too */}
+                 <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-4 xl:gap-6 space-y-4 xl:space-y-6">
+                    {(activeTab === 'favorites' ? favoriteImages : gallery).map(img => (
                         <div key={img.id} className="break-inside-avoid">
                             <ImageCard 
                                 task={{
@@ -640,42 +739,50 @@ export default function App() {
                                 }} 
                                 onDelete={handleDeleteGallery}
                                 onIterate={handleIterate}
-                                onView={setLightboxImage}
+                                onView={(img) => openLightbox(img, activeTab === 'favorites' ? favoriteImages : gallery)}
+                                onToggleFavorite={handleToggleFavorite}
                             />
                         </div>
                     ))}
-                    {gallery.length === 0 && (
-                        <div className="col-span-full text-center py-20 text-gray-500">
-                            Gallery is empty.
+                    {(activeTab === 'favorites' ? favoriteImages : gallery).length === 0 && (
+                        <div className="col-span-full text-center py-32 text-gray-500 text-lg">
+                            {activeTab === 'favorites' ? 'No favorites yet.' : 'Gallery is empty.'}
                         </div>
                     )}
                 </div>
             </div>
         )}
-        
-        {/* Footer Removed - Content moved to Header */}
       </main>
 
       {/* --- Floating Footer (Command Center) --- */}
       {activeTab === 'create' && (
-        <div className="fixed bottom-0 left-0 right-0 z-30 flex flex-col items-center justify-end pointer-events-none pb-6 px-4">
+        <div className="fixed bottom-0 left-0 right-0 z-30 flex flex-col items-center justify-end pointer-events-none pb-8 px-4">
             
-            <div className="w-full max-w-3xl pointer-events-auto flex flex-col items-center">
+            <div className="w-full max-w-4xl pointer-events-auto flex flex-col items-center">
                 
                 {/* 1. Settings Tray (Collapsible) */}
                 <div 
-                    className={`w-full bg-gray-900/95 backdrop-blur-xl border border-gray-800 rounded-2xl mb-2 overflow-hidden transition-all duration-300 ease-out origin-bottom shadow-2xl ${
-                        showConfig ? 'max-h-[500px] opacity-100 scale-100' : 'max-h-0 opacity-0 scale-95'
+                    className={`w-full bg-gray-900/95 backdrop-blur-xl border border-gray-800 rounded-3xl mb-3 overflow-hidden transition-all duration-300 ease-out origin-bottom shadow-2xl ${
+                        showConfig ? 'max-h-[600px] opacity-100 scale-100' : 'max-h-0 opacity-0 scale-95'
                     }`}
                 >
-                    <div className="p-4 space-y-4">
+                    <div className="p-6 space-y-6 relative">
+                        {/* Close Button */}
+                        <button 
+                            onClick={() => setShowConfig(false)}
+                            className="absolute top-3 right-3 p-2 text-gray-500 hover:text-white rounded-full hover:bg-gray-800 transition-colors z-10"
+                            title="Close Settings"
+                        >
+                            <X size={20} />
+                        </button>
+
                         {/* Params Row */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                             {/* Aspect Ratios */}
-                            <div className="space-y-2">
-                                <div className="text-xs font-medium text-peach-500 mb-1">Nano Banana Settings</div>
-                                <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Aspect Ratio</label>
-                                <div className="grid grid-cols-5 gap-2">
+                            <div className="space-y-3">
+                                <div className="text-sm font-medium text-peach-500 mb-2">Nano Banana Settings</div>
+                                <label className="text-xs uppercase font-bold text-gray-500 tracking-wider">Aspect Ratio</label>
+                                <div className="grid grid-cols-5 gap-3">
                                     {portraitRatios.map(ratio => (
                                         <div key={ratio} onClick={() => toggleRatio(ratio)} className="h-14">
                                             <AspectRatioIcon ratio={ratio} active={params.aspectRatios.includes(ratio)} orientation="portrait" />
@@ -690,15 +797,15 @@ export default function App() {
                             </div>
                             
                             {/* Count & Resolution */}
-                            <div className="space-y-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Resolution</label>
-                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-800">
+                            <div className="space-y-6">
+                                <div className="space-y-3">
+                                    <label className="text-xs uppercase font-bold text-gray-500 tracking-wider">Resolution</label>
+                                    <div className="flex bg-black/40 rounded-xl p-1.5 border border-gray-800">
                                         {['1K', '2K', '4K'].map((res) => (
                                             <button
                                                 key={res}
                                                 onClick={() => setParams(p => ({ ...p, resolution: res as Resolution }))}
-                                                className={`flex-1 py-1.5 text-xs rounded-md transition-all ${
+                                                className={`flex-1 py-2 text-sm rounded-lg transition-all ${
                                                     params.resolution === res
                                                     ? 'bg-gray-700 text-white shadow-sm'
                                                     : 'text-gray-500 hover:text-gray-300'
@@ -710,10 +817,10 @@ export default function App() {
                                     </div>
                                 </div>
 
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                     <div className="flex justify-between">
-                                        <label className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Image Count</label>
-                                        <span className="text-xs font-mono text-peach-400">{params.count}</span>
+                                        <label className="text-xs uppercase font-bold text-gray-500 tracking-wider">Image Count</label>
+                                        <span className="text-sm font-mono text-peach-400">{params.count}</span>
                                     </div>
                                     <input 
                                         type="range" 
@@ -721,9 +828,9 @@ export default function App() {
                                         max="8" 
                                         value={params.count}
                                         onChange={(e) => setParams(p => ({ ...p, count: parseInt(e.target.value) }))}
-                                        className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-peach-500"
+                                        className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-peach-500"
                                     />
-                                    <div className="flex justify-between text-[9px] text-gray-600 font-mono">
+                                    <div className="flex justify-between text-[10px] text-gray-600 font-mono">
                                         <span>1</span>
                                         <span>8</span>
                                     </div>
@@ -734,8 +841,8 @@ export default function App() {
                 </div>
 
                 {/* 2. Style Chips (Floating above Input) */}
-                <div className="w-full mb-2 overflow-x-auto pb-1 scrollbar-none mask-gradient-x">
-                    <div className="flex gap-2 items-center px-1">
+                <div className="w-full mb-3 overflow-x-auto pb-1 scrollbar-none mask-gradient-x">
+                    <div className="flex gap-2.5 items-center px-1">
                         {allPresets
                             .sort((a, b) => (a.id === 'none' ? -1 : b.id === 'none' ? 1 : 0))
                             .map(p => {
@@ -744,13 +851,13 @@ export default function App() {
                                 <button
                                     key={p.id}
                                     onClick={() => setSelectedStyleId(p.id)}
-                                    className={`relative group flex items-center gap-1.5 pl-3 pr-4 py-1.5 rounded-full text-xs whitespace-nowrap transition-all border ${
+                                    className={`relative group flex items-center gap-2 pl-4 pr-5 py-2 rounded-full text-sm whitespace-nowrap transition-all border ${
                                         isSelected 
                                         ? 'bg-gray-800 border-peach-500/50 text-peach-100 shadow-[0_0_10px_rgba(255,127,80,0.15)]' 
                                         : 'bg-black/40 backdrop-blur-md border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                                     }`}
                                 >
-                                    {p.icon && <span className="text-sm">{p.icon}</span>}
+                                    {p.icon && <span className="text-base">{p.icon}</span>}
                                     <span className="font-medium">{p.name}</span>
                                     
                                     {p.id !== 'none' && (
@@ -758,7 +865,7 @@ export default function App() {
                                             onClick={(e) => { e.stopPropagation(); openEditStyleModal(p); }}
                                             className={`ml-1 p-0.5 rounded-full hover:bg-gray-600 text-gray-500 hover:text-white transition-colors ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                                         >
-                                            <Settings size={10} />
+                                            <Settings size={12} />
                                         </div>
                                     )}
                                 </button>
@@ -766,43 +873,43 @@ export default function App() {
                         })}
                          <button
                             onClick={openCreateStyleModal}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors border border-dashed border-gray-700 text-gray-500 hover:border-peach-500 hover:text-peach-400 bg-black/20 backdrop-blur-md"
+                            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm whitespace-nowrap transition-colors border border-dashed border-gray-700 text-gray-500 hover:border-peach-500 hover:text-peach-400 bg-black/20 backdrop-blur-md"
                         >
-                            <Plus size={12} />
+                            <Plus size={14} />
                             <span>New</span>
                         </button>
                     </div>
                 </div>
 
-                {/* 3. Main Input Bar */}
-                <div className="w-full bg-black/80 backdrop-blur-xl border border-gray-800 rounded-3xl md:rounded-[2rem] shadow-2xl flex flex-col p-2 md:p-1.5 gap-0 relative ring-1 ring-white/5">
+                {/* 3. Main Input Bar - Larger Padding/Height */}
+                <div className="w-full bg-black/80 backdrop-blur-xl border border-gray-800 rounded-3xl md:rounded-[2.5rem] shadow-2xl flex flex-col p-3 md:p-2 gap-0 relative ring-1 ring-white/5">
                     
                     {/* Top: Uploaded Images Strip */}
                     {referenceImages.length > 0 && (
-                        <div className="flex gap-2 overflow-x-auto p-2 scrollbar-none">
+                        <div className="flex gap-3 overflow-x-auto p-2 scrollbar-none mb-1">
                             {referenceImages.map((img, idx) => (
-                                <div key={idx} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-gray-700 group">
+                                <div key={idx} className="relative flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden border border-gray-700 group">
                                     <img src={img} className="w-full h-full object-cover" alt={`ref-${idx}`} />
                                     <button 
                                         onClick={() => removeReferenceImage(idx)}
                                         className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white"
                                     >
-                                        <X size={14} />
+                                        <X size={18} />
                                     </button>
                                 </div>
                             ))}
                             {referenceImages.length < 6 && (
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
-                                    className="flex-shrink-0 w-16 h-16 rounded-lg border border-dashed border-gray-700 flex items-center justify-center text-gray-500 hover:text-peach-400 hover:border-peach-500 hover:bg-gray-800/50 transition-all"
+                                    className="flex-shrink-0 w-20 h-20 rounded-xl border border-dashed border-gray-700 flex items-center justify-center text-gray-500 hover:text-peach-400 hover:border-peach-500 hover:bg-gray-800/50 transition-all"
                                 >
-                                    <Plus size={18} />
+                                    <Plus size={24} />
                                 </button>
                             )}
                         </div>
                     )}
 
-                    <div className="flex flex-col md:flex-row md:items-end gap-2 w-full">
+                    <div className="flex flex-col md:flex-row md:items-end gap-3 w-full">
                          
                         <input 
                             type="file" 
@@ -826,7 +933,7 @@ export default function App() {
                             }}
                             onPaste={handlePaste}
                             placeholder={referenceImages.length > 0 ? "Describe changes..." : "Imagine..."}
-                            className="order-1 md:order-2 flex-1 w-full bg-transparent text-gray-200 placeholder:text-gray-600 text-sm p-2 md:p-3 focus:outline-none resize-none min-h-[40px] md:min-h-[44px] max-h-[100px] md:max-h-[208px] py-3 leading-relaxed scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent"
+                            className="order-1 md:order-2 flex-1 w-full bg-transparent text-gray-200 placeholder:text-gray-600 text-base md:text-lg p-3 md:p-5 focus:outline-none resize-none min-h-[40px] md:min-h-[60px] max-h-[100px] md:max-h-[208px] py-3 leading-relaxed scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent"
                             rows={1}
                         />
 
@@ -834,33 +941,33 @@ export default function App() {
                         <div className="order-2 md:contents flex justify-between items-center w-full mt-1 md:mt-0">
                             
                             {/* Left: Image Upload Trigger */}
-                            <div className="md:order-1 relative flex-shrink-0 mb-0.5 ml-0.5">
+                            <div className="md:order-1 relative flex-shrink-0 mb-0.5 ml-1 md:ml-3 md:mb-3">
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
                                     disabled={referenceImages.length >= 6}
-                                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all overflow-hidden border ${
+                                    className={`w-12 h-12 rounded-full flex items-center justify-center transition-all overflow-hidden border ${
                                         referenceImages.length > 0
                                         ? 'bg-peach-900/20 border-peach-500 text-peach-500' 
                                         : 'bg-gray-800 hover:bg-gray-700 border-transparent text-gray-400 hover:text-white'
                                     }`}
                                     title={referenceImages.length >= 6 ? "Max 6 images" : "Add Reference Image"}
                                 >
-                                    <ImageIcon size={20} />
+                                    <ImageIcon size={24} />
                                 </button>
                                 {referenceImages.length > 0 && (
-                                    <div className="absolute -top-1 -right-1 w-4 h-4 bg-peach-500 text-black text-[9px] font-bold rounded-full flex items-center justify-center">
+                                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-peach-500 text-black text-[10px] font-bold rounded-full flex items-center justify-center">
                                         {referenceImages.length}
                                     </div>
                                 )}
                             </div>
 
                             {/* Right: Actions */}
-                            <div className="md:order-3 flex items-center gap-1 md:gap-2 mb-0.5 mr-0.5">
+                            <div className="md:order-3 flex items-center gap-2 md:gap-3 mb-0.5 mr-1 md:mr-2 md:mb-3">
                                 {/* Config Summary */}
                                 {!showConfig && (
                                     <button 
                                         onClick={() => setShowConfig(true)}
-                                        className="flex items-center gap-2 mr-2 px-3 py-1.5 rounded-full bg-gray-800/50 hover:bg-gray-800 border border-transparent hover:border-gray-700 transition-all text-xs text-gray-400 hover:text-gray-200 overflow-hidden max-w-[150px] md:max-w-none whitespace-nowrap"
+                                        className="flex items-center gap-3 mr-2 px-4 py-2 rounded-full bg-gray-800/50 hover:bg-gray-800 border border-transparent hover:border-gray-700 transition-all text-xs md:text-sm text-gray-400 hover:text-gray-200 overflow-hidden max-w-[150px] md:max-w-none whitespace-nowrap"
                                     >
                                         <span className="font-medium text-peach-500/80 truncate">{params.aspectRatios.length > 2 ? `${params.aspectRatios.length} Ratios` : params.aspectRatios.join(', ')}</span>
                                         <span className="w-px h-3 bg-gray-700 flex-shrink-0"></span>
@@ -873,23 +980,23 @@ export default function App() {
                                 {/* Config Toggle */}
                                 <button
                                     onClick={() => setShowConfig(!showConfig)}
-                                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border ${
+                                    className={`w-11 h-11 rounded-full flex items-center justify-center transition-all border ${
                                         showConfig 
                                         ? 'bg-gray-800 text-peach-400 border-gray-700' 
                                         : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50 border-transparent'
                                     }`}
                                     title="Settings"
                                 >
-                                    <SlidersHorizontal size={18} />
+                                    <SlidersHorizontal size={20} />
                                 </button>
 
                                 {/* Generate Button */}
                                 <button 
                                     onClick={() => handleGenerate()}
-                                    className="h-10 px-4 rounded-full bg-gradient-to-r from-peach-600 to-peach-500 text-white font-semibold flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-peach-900/20"
+                                    className="h-12 px-6 rounded-full bg-gradient-to-r from-peach-600 to-peach-500 text-white font-semibold flex items-center gap-2.5 hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-peach-900/20 text-base"
                                 >
                                     <span className="hidden sm:inline">Run</span>
-                                    <Sparkles size={16} fill="currentColor" />
+                                    <Sparkles size={18} fill="currentColor" />
                                 </button>
                             </div>
                         </div>
@@ -900,24 +1007,81 @@ export default function App() {
         </div>
       )}
 
+      {/* ... (rest of the file remains unchanged, modal code etc) ... */}
+      
       {/* --- Lightbox --- */}
-      {lightboxImage && (
-          <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur flex items-center justify-center p-4">
-              <button 
-                onClick={() => setLightboxImage(null)}
-                className="absolute top-4 right-4 p-2 bg-gray-800 rounded-full text-white hover:bg-gray-700"
+      {lightboxState.isOpen && lightboxState.images.length > 0 && (
+          <div className="fixed inset-0 z-[100] bg-black/98 backdrop-blur flex items-center justify-center animate-in fade-in duration-200" onClick={() => setLightboxState(prev => ({ ...prev, isOpen: false }))}>
+              
+              {/* Image Container */}
+              <div 
+                className="relative max-w-full max-h-full p-4 md:p-12 flex items-center justify-center h-full w-full" 
+                onClick={(e) => {
+                    // Clicking image itself also closes it, as per request
+                    setLightboxState(prev => ({ ...prev, isOpen: false }));
+                }}
               >
-                  <X />
-              </button>
-              <img 
-                src={lightboxImage.url} 
-                alt={lightboxImage.prompt} 
-                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-              />
-              <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none">
-                  <p className="inline-block bg-black/50 px-4 py-2 rounded-full text-sm text-gray-300 backdrop-blur-sm border border-gray-800 max-w-2xl truncate">
-                      {lightboxImage.prompt}
-                  </p>
+                  <img 
+                    src={lightboxState.images[lightboxState.currentIndex].url} 
+                    alt={lightboxState.images[lightboxState.currentIndex].prompt} 
+                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-zoom-out select-none"
+                    onClick={(e) => e.stopPropagation()} // Prevent bubble up if we wanted click-image-to-close to be unique, but here we want it to close too. Actually user said "click again to shrink".
+                  />
+                  
+                  {/* Close Button */}
+                  <button 
+                    onClick={() => setLightboxState(prev => ({ ...prev, isOpen: false }))}
+                    className="absolute top-6 right-6 p-3 bg-gray-800/50 hover:bg-gray-800 rounded-full text-white transition-colors z-20"
+                  >
+                      <X size={24} />
+                  </button>
+
+                  {/* Navigation Arrows */}
+                  <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between px-4 md:px-8 pointer-events-none">
+                       <button 
+                            onClick={(e) => { e.stopPropagation(); handlePrevImage(); }}
+                            className="pointer-events-auto p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
+                       >
+                           <ChevronLeft size={48} />
+                       </button>
+                       <button 
+                            onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
+                            className="pointer-events-auto p-4 rounded-full bg-black/20 hover:bg-black/60 text-white/50 hover:text-white transition-all backdrop-blur-sm"
+                       >
+                           <ChevronRight size={48} />
+                       </button>
+                  </div>
+
+                  {/* Info Overlay */}
+                  <div 
+                    className="absolute bottom-8 left-0 right-0 text-center pointer-events-none px-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                      <div className="inline-flex flex-col items-center gap-2 pointer-events-auto">
+                        <p className="bg-black/60 px-6 py-3 rounded-2xl text-base text-gray-200 backdrop-blur-md border border-white/10 max-w-3xl line-clamp-2">
+                            {lightboxState.images[lightboxState.currentIndex].prompt}
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => handleToggleFavorite(lightboxState.images[lightboxState.currentIndex])}
+                                className={`p-3 rounded-full backdrop-blur-md border transition-colors ${
+                                    lightboxState.images[lightboxState.currentIndex].isFavorite
+                                    ? 'bg-red-500/20 text-red-500 border-red-500/30' 
+                                    : 'bg-black/40 text-gray-400 border-white/10 hover:bg-white/10'
+                                }`}
+                            >
+                                <Heart size={20} fill={lightboxState.images[lightboxState.currentIndex].isFavorite ? "currentColor" : "none"} />
+                            </button>
+                            <a 
+                                href={lightboxState.images[lightboxState.currentIndex].url} 
+                                download={`giga-peach-${lightboxState.images[lightboxState.currentIndex].id}.png`}
+                                className="p-3 bg-black/40 border border-white/10 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition-colors backdrop-blur-md"
+                            >
+                                <Download size={20} />
+                            </a>
+                        </div>
+                      </div>
+                  </div>
               </div>
           </div>
       )}
@@ -928,6 +1092,7 @@ export default function App() {
         onClose={() => { if(apiKey) setKeyModalOpen(false); }}
         title="Connect API Key"
       >
+          {/* ... existing modal content ... */}
           <div className="space-y-6">
               <div className="p-4 bg-peach-900/10 border border-peach-900/30 rounded-lg">
                   <p className="text-sm text-peach-200">
@@ -992,6 +1157,7 @@ export default function App() {
         onClose={() => setStyleModalOpen(false)} 
         title={editingStyleId ? "Edit Style" : "Create New Style"}
       >
+          {/* ... existing modal content ... */}
           <div className="space-y-4">
               <div className="flex gap-4">
                   <div className="flex-1">
